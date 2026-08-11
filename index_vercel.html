@@ -273,9 +273,28 @@ header {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  position: relative;
 }
-.prod-img img { width:100%; height:100%; object-fit:cover; }
+.prod-img img   { width:100%; height:100%; object-fit:cover; }
+.prod-img video { width:100%; height:100%; object-fit:cover; }
 .prod-emoji { font-size: 5rem; }
+.vid-tag {
+  position: absolute;
+  top: 8px; left: 8px;
+  background: rgba(0,0,0,0.65);
+  color: #fff;
+  font-size: .68rem;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 6px;
+  letter-spacing: .4px;
+  pointer-events: none;
+}
+.prod-img-loading {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 8px; color: var(--muted); font-size: .82rem;
+}
 
 .prod-body { padding: 1.2rem; flex:1; display:flex; flex-direction:column; }
 .prod-name { font-size: 1rem; font-weight: 700; margin-bottom: 0.3rem; color: var(--txt); }
@@ -950,8 +969,31 @@ footer strong { color: var(--accent); }
      ════════════════════════════════ -->
 <script>
 /* ── CONFIG ── */
-const LS      = 'cv_data';
-const MAX_ORD = 100;
+const LS       = 'cv_data';
+const MAX_ORD  = 100;
+const IDB_NAME = 'cv_media_db';
+
+/* ── INDEXEDDB (solo lectura en la tienda) ── */
+let _idb = null;
+function openIDB() {
+  if (_idb) return Promise.resolve(_idb);
+  return new Promise((res,rej) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('media',{keyPath:'key'});
+    req.onsuccess = e => { _idb = e.target.result; res(_idb); };
+    req.onerror   = e => rej(e);
+  });
+}
+async function idbGet(key) {
+  try {
+    await openIDB();
+    return new Promise((res,rej) => {
+      const req = _idb.transaction('media','readonly').objectStore('media').get(key);
+      req.onsuccess = e => res(e.target.result?.blob || null);
+      req.onerror   = e => rej(e);
+    });
+  } catch(e) { return null; }
+}
 
 /* ── STATE ── */
 let S = {
@@ -1013,19 +1055,32 @@ function clp(n)  { return '$'+Number(n).toLocaleString('es-CL'); }
 function oNum(n) { return 'P'+String(n).padStart(2,'0'); }
 
 /* ── PRODUCTS ── */
-function renderProducts() {
+// Track blob URLs to revoke them on re-render
+const _vidUrls = new Map();
+
+async function renderProducts() {
   const g = document.getElementById('productsGrid');
   if (!S.products.length) {
     g.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:4rem;color:var(--muted)"><span style="font-size:3.5rem">📦</span><p style="margin-top:1rem">Sin productos aún. Agrega desde el panel admin.</p></div>';
     return;
   }
-  g.innerHTML = S.products.map(p=>`
+
+  // Render cards — video products show a loading placeholder first
+  g.innerHTML = S.products.map(p => {
+    let mediaHtml;
+    if (p.hasVideo) {
+      mediaHtml = `<div class="prod-img-loading" id="vidLoad_${p.id}">
+        <span style="font-size:2rem">⏳</span><span>Cargando video…</span>
+      </div><span class="vid-tag">▶ VIDEO</span>`;
+    } else if (p.img) {
+      mediaHtml = `<img src="${p.img}" alt="${p.name}" onerror="this.parentElement.innerHTML='<span class=\\'prod-emoji\\'>${p.emoji||'📦'}</span>'">`;
+    } else {
+      mediaHtml = `<span class="prod-emoji">${p.emoji||'📦'}</span>`;
+    }
+
+    return `
     <div class="prod-card">
-      <div class="prod-img">
-        ${p.img
-          ? `<img src="${p.img}" alt="${p.name}" onerror="this.parentElement.innerHTML='<span class=\\'prod-emoji\\'>${p.emoji||'📦'}</span>'">`
-          : `<span class="prod-emoji">${p.emoji||'📦'}</span>`}
-      </div>
+      <div class="prod-img" id="pimg_${p.id}">${mediaHtml}</div>
       <div class="prod-body">
         <div class="prod-name">${p.name}</div>
         <div class="prod-desc">${p.desc}</div>
@@ -1039,7 +1094,36 @@ function renderProducts() {
           </button>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+
+  // Async: load videos from IndexedDB
+  for (const p of S.products.filter(x => x.hasVideo)) {
+    try {
+      // Revoke old blob URL if exists
+      if (_vidUrls.has(p.id)) {
+        URL.revokeObjectURL(_vidUrls.get(p.id));
+        _vidUrls.delete(p.id);
+      }
+      const blob = await idbGet(`vid_${p.id}`);
+      const el   = document.getElementById(`pimg_${p.id}`);
+      if (!el) continue;
+
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        _vidUrls.set(p.id, url);
+        el.innerHTML = `
+          <video src="${url}" autoplay muted loop playsinline
+            style="width:100%;height:100%;object-fit:cover"></video>
+          <span class="vid-tag">▶ VIDEO</span>`;
+      } else {
+        // Video not in IndexedDB (different device/browser), fall back to image or emoji
+        el.innerHTML = p.img
+          ? `<img src="${p.img}" alt="${p.name}"><span class="vid-tag">▶ VIDEO</span>`
+          : `<span class="prod-emoji">${p.emoji||'📦'}</span>`;
+      }
+    } catch(e) {}
+  }
 }
 
 /* ── CART ── */
@@ -1267,8 +1351,9 @@ function placeOrder() {
 /* ── INIT ── */
 load();
 initTheme();
-renderProducts();
+renderProducts(); // async, loads videos in background
 updateBadge();
+openIDB().catch(()=>{}); // pre-open IndexedDB
 </script>
 </body>
 </html>
