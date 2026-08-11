@@ -1237,22 +1237,19 @@ async function renderProducts() {
     return;
   }
 
-  // Render cards — video products show a loading placeholder first
+  // Tarjeta siempre muestra FOTO (video solo se ve al hacer clic en el modal)
   g.innerHTML = S.products.map(p => {
-    let mediaHtml;
-    if (p.hasVideo) {
-      mediaHtml = `<div class="prod-img-loading" id="vidLoad_${p.id}">
-        <span style="font-size:2rem">⏳</span><span>Cargando video…</span>
-      </div><span class="vid-tag">▶ VIDEO</span>`;
-    } else if (p.img) {
-      mediaHtml = `<img src="${p.img}" alt="${p.name}" onerror="this.parentElement.innerHTML='<span class=\\'prod-emoji\\'>${p.emoji||'📦'}</span>'">`;
-    } else {
-      mediaHtml = `<span class="prod-emoji">${p.emoji||'📦'}</span>`;
-    }
+    // Media: foto tiene prioridad; badge ▶ VIDEO si el producto tiene video
+    const mediaHtml = p.img
+      ? `<img src="${p.img}" alt="${p.name}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+        + `<span class="prod-emoji" style="display:none">${p.emoji||'📦'}</span>`
+      : `<span class="prod-emoji">${p.emoji||'📦'}</span>`;
+
+    const vidBadge = p.hasVideo ? '<span class="vid-tag">▶ VIDEO</span>' : '';
 
     return `
     <div class="prod-card" onclick="openProductDetail(${p.id})" title="Ver detalles">
-      <div class="prod-img" id="pimg_${p.id}">${mediaHtml}</div>
+      <div class="prod-img">${mediaHtml}${vidBadge}</div>
       <div class="prod-body">
         <div class="prod-name">${p.name}</div>
         <div class="prod-desc">${p.desc}</div>
@@ -1269,34 +1266,6 @@ async function renderProducts() {
       </div>
     </div>`;
   }).join('');
-
-  // Async: load videos from IndexedDB
-  for (const p of S.products.filter(x => x.hasVideo)) {
-    try {
-      // Revoke old blob URL if exists
-      if (_vidUrls.has(p.id)) {
-        URL.revokeObjectURL(_vidUrls.get(p.id));
-        _vidUrls.delete(p.id);
-      }
-      const blob = await idbGet(`vid_${p.id}`);
-      const el   = document.getElementById(`pimg_${p.id}`);
-      if (!el) continue;
-
-      if (blob) {
-        const url = URL.createObjectURL(blob);
-        _vidUrls.set(p.id, url);
-        el.innerHTML = `
-          <video src="${url}" autoplay muted loop playsinline
-            style="width:100%;height:100%;object-fit:cover"></video>
-          <span class="vid-tag">▶ VIDEO</span>`;
-      } else {
-        // Video not in IndexedDB (different device/browser), fall back to image or emoji
-        el.innerHTML = p.img
-          ? `<img src="${p.img}" alt="${p.name}"><span class="vid-tag">▶ VIDEO</span>`
-          : `<span class="prod-emoji">${p.emoji||'📦'}</span>`;
-      }
-    } catch(e) {}
-  }
 }
 
 /* ── CART ── */
