@@ -167,6 +167,39 @@ input::placeholder,textarea::placeholder{color:var(--muted);}
 .btn-save{background:linear-gradient(135deg,var(--accent),var(--acc-dk));color:#0a0800;border:none;padding:9px 20px;border-radius:9px;cursor:pointer;font-size:.88rem;font-weight:800;transition:opacity var(--t);box-shadow:0 2px 10px var(--acc-glow);}
 .btn-save:hover{opacity:.88;}
 
+/* ── WHOLESALE BOX ── */
+.ws-box {
+  border: 1.5px solid var(--brd2);
+  border-radius: 11px;
+  padding: 1.1rem;
+  margin-bottom: .9rem;
+  background: rgba(244,165,33,0.05);
+}
+.ws-box-title {
+  font-size: .82rem;
+  font-weight: 800;
+  color: var(--accent);
+  margin-bottom: .8rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ws-opt { color: var(--muted); font-size:.72rem; font-weight:400; }
+.ws-note { font-size:.72rem; color:var(--muted); margin-top:.5rem; line-height:1.5; }
+
+/* Wholesale badge in table */
+.ws-badge {
+  display:inline-block;
+  background:rgba(244,165,33,0.12);
+  border:1px solid var(--brd2);
+  color:var(--accent);
+  font-size:.68rem;
+  font-weight:800;
+  padding:2px 7px;
+  border-radius:6px;
+  margin-top:3px;
+}
+
 /* ── UPLOAD ZONES ── */
 .media-section{border:1px solid var(--brd);border-radius:12px;padding:1.2rem;margin-bottom:.9rem;background:var(--surf2);}
 .media-section-title{font-size:.8rem;font-weight:800;color:var(--txt);text-transform:uppercase;letter-spacing:.5px;margin-bottom:1rem;display:flex;align-items:center;gap:6px;}
@@ -297,14 +330,34 @@ input::placeholder,textarea::placeholder{color:var(--muted);}
     </div>
     <div class="frow">
       <div class="fgroup">
-        <label>Precio (CLP) *</label>
+        <label>Precio unitario (retail) *</label>
         <input type="number" id="pPrice" placeholder="9990" min="0">
+        <div style="font-size:.7rem;color:var(--muted);margin-top:3px">Precio normal por unidad</div>
       </div>
       <div class="fgroup">
         <label>Stock disponible *</label>
         <input type="number" id="pStock" placeholder="50" min="0">
       </div>
     </div>
+
+    <!-- PRECIO MAYORISTA -->
+    <div class="ws-box">
+      <div class="ws-box-title">📦 Precio Mayorista <span class="ws-opt">— opcional</span></div>
+      <div class="frow">
+        <div class="fgroup" style="margin-bottom:0">
+          <label>Precio mayorista (CLP)</label>
+          <input type="number" id="pWprice" placeholder="0" min="0">
+        </div>
+        <div class="fgroup" style="margin-bottom:0">
+          <label>Aplica desde (unidades)</label>
+          <input type="number" id="pWmin" placeholder="4" min="2">
+        </div>
+      </div>
+      <div class="ws-note">
+        💡 Ej: $7.990 mayorista desde 4 unidades → si el cliente agrega 4 o más, paga el precio mayorista en todas las unidades. Deja en 0 si no aplica mayorista.
+      </div>
+    </div>
+
     <div class="fgroup">
       <label>Emoji / ícono (si no hay foto)</label>
       <input type="text" id="pEmoji" placeholder="📦" maxlength="4">
@@ -591,12 +644,14 @@ async function openProdModal(id=null) {
   document.getElementById('prodId').value=id||'';
 
   const p=id?S.products.find(x=>x.id===id):null;
-  document.getElementById('pName').value  = p?p.name:'';
-  document.getElementById('pDesc').value  = p?p.desc:'';
-  document.getElementById('pPrice').value = p?p.price:'';
-  document.getElementById('pStock').value = p?p.stock:'';
-  document.getElementById('pEmoji').value = p?(p.emoji||'📦'):'📦';
-  document.getElementById('pImg').value   = ''; // always clear URL field
+  document.getElementById('pName').value   = p?p.name:'';
+  document.getElementById('pDesc').value   = p?p.desc:'';
+  document.getElementById('pPrice').value  = p?p.price:'';
+  document.getElementById('pStock').value  = p?p.stock:'';
+  document.getElementById('pEmoji').value  = p?(p.emoji||'📦'):'📦';
+  document.getElementById('pImg').value    = '';
+  document.getElementById('pWprice').value = p?(p.wholesalePrice||''):'';
+  document.getElementById('pWmin').value   = p?(p.wholesaleMin||''):'4'; // always clear URL field
 
   // Image preview
   if (p?.img) {
@@ -626,12 +681,15 @@ async function saveProd() {
   const desc  = document.getElementById('pDesc').value.trim();
   const price = parseFloat(document.getElementById('pPrice').value);
   const stock = parseInt(document.getElementById('pStock').value);
-  const emoji = document.getElementById('pEmoji').value.trim()||'📦';
-  const urlImg = document.getElementById('pImg').value.trim();
+  const emoji          = document.getElementById('pEmoji').value.trim()||'📦';
+  const urlImg         = document.getElementById('pImg').value.trim();
+  const wholesalePrice = parseFloat(document.getElementById('pWprice').value)||0;
+  const wholesaleMin   = parseInt(document.getElementById('pWmin').value)||4;
 
-  if(!name)             { toast('Ingresa el nombre','err'); return; }
+  if(!name)                { toast('Ingresa el nombre','err'); return; }
   if(isNaN(price)||price<0){ toast('Precio inválido','err'); return; }
   if(isNaN(stock)||stock<0){ toast('Stock inválido','err'); return; }
+  if(wholesalePrice>0 && wholesalePrice>=price){ toast('El precio mayorista debe ser menor al precio retail','err'); return; }
 
   // Final image: upload > URL > existing
   const existingProd = id ? S.products.find(p=>p.id===parseInt(id)) : null;
@@ -649,13 +707,13 @@ async function saveProd() {
         if (mVidClear) { await idbDel(`vid_${id}`); hasVideo=false; }
         if (mVid)      { await idbSave(`vid_${id}`, mVid); hasVideo=true; }
 
-        S.products[idx]={...S.products[idx],name,desc,price,stock,img:finalImg,emoji,hasVideo};
+        S.products[idx]={...S.products[idx],name,desc,price,wholesalePrice,wholesaleMin,stock,img:finalImg,emoji,hasVideo};
       }
     } else {
       const newId=S.products.length?Math.max(...S.products.map(p=>p.id))+1:1;
       let hasVideo=false;
       if (mVid) { await idbSave(`vid_${newId}`, mVid); hasVideo=true; }
-      S.products.push({id:newId,name,desc,price,stock,img:finalImg,emoji,hasVideo});
+      S.products.push({id:newId,name,desc,price,wholesalePrice,wholesaleMin,stock,img:finalImg,emoji,hasVideo});
     }
 
     save(); renderProdTable(); updateStats();
@@ -706,7 +764,10 @@ async function renderProdTable() {
       </td>
       <td><strong>${p.name}</strong></td>
       <td style="color:var(--muted);max-width:180px;font-size:.82rem">${p.desc||'—'}</td>
-      <td><strong style="color:var(--accent)">${clp(p.price)}</strong></td>
+      <td>
+        <strong style="color:var(--accent)">${clp(p.price)}</strong>
+        ${p.wholesalePrice>0?`<br><span class="ws-badge">📦 ${clp(p.wholesalePrice)} ×${p.wholesaleMin}+</span>`:''}
+      </td>
       <td><input class="stock-inp" type="number" value="${p.stock}" min="0" onchange="setStock(${p.id},this.value)"></td>
       <td>
         <div style="display:flex;gap:5px">

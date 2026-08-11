@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CalvarezVentas</title>
+<!-- EmailJS para envío automático de correos de confirmación -->
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
 /* ══════════════════════════════════════════
    VARIABLES — NOCHE (default) / DÍA
@@ -927,6 +929,79 @@ footer strong { color: var(--accent); }
 .toast.ok  { border-color:var(--green); background:rgba(34,197,94,0.12); }
 .toast.err { border-color:var(--red);   background:rgba(230,57,70,0.12); }
 
+/* ══════════════════════════════════════════ WHOLESALE BADGES */
+.prod-ws-info {
+  font-size: .75rem;
+  color: var(--txt2);
+  margin-top: .38rem;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.prod-ws-info strong { color: var(--accent); }
+
+.ws-applied {
+  display: inline-block;
+  background: rgba(34,197,94,0.12);
+  border: 1px solid var(--green);
+  color: var(--green);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: .72rem;
+  font-weight: 700;
+  margin-top: 3px;
+  white-space: nowrap;
+}
+.ws-hint {
+  display: inline-block;
+  background: var(--acc-glow);
+  border: 1px solid var(--brd2);
+  color: var(--txt2);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: .72rem;
+  font-weight: 600;
+  margin-top: 3px;
+  white-space: nowrap;
+}
+
+/* ══════════════════════════════════════════ CONFIRMATION extras */
+.conf-transfer-box {
+  background: rgba(244,165,33,0.08);
+  border: 1px solid var(--brd2);
+  border-radius: 12px;
+  padding: 1.2rem 1.3rem;
+  margin: 1.2rem 0;
+  text-align: left;
+}
+.conf-transfer-box h4 {
+  font-size: .9rem;
+  font-weight: 800;
+  color: var(--accent);
+  margin-bottom: .6rem;
+}
+.conf-transfer-box p {
+  font-size: .82rem;
+  color: var(--txt2);
+  line-height: 1.5;
+  margin-bottom: .5rem;
+}
+.conf-transfer-box img {
+  width: 100%;
+  border-radius: 8px;
+  margin-top: .5rem;
+}
+.conf-order-msg {
+  background: rgba(34,197,94,0.08);
+  border: 1px solid var(--green);
+  border-radius: 10px;
+  padding: .75rem 1rem;
+  font-size: .82rem;
+  color: var(--txt);
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
 /* ══════════════════════════════════════════ RESPONSIVE */
 @media (max-width:620px) {
   .frow { grid-template-columns:1fr; }
@@ -1131,6 +1206,13 @@ footer strong { color: var(--accent); }
       <div class="order-pill" id="confNum">P01</div>
       <p style="color:var(--muted);font-size:.83rem;margin-bottom:1.5rem">Guarda este número para rastrear tu pedido</p>
       <div class="conf-rows" id="confRows"></div>
+      <div id="confTransfer" style="display:none" class="conf-transfer-box">
+        <h4>🏦 Datos de Transferencia</h4>
+        <p id="confTransferMsg"></p>
+        <p style="font-size:.85rem;font-weight:700;color:var(--accent)">📝 Importante: escribe tu número de pedido <strong id="confTransferNum"></strong> en el mensaje de la transferencia.</p>
+        <img src="datos_transferencia.jpeg" alt="Datos de transferencia">
+      </div>
+      <div id="confEmailNotice" style="display:none" class="conf-order-msg"></div>
       <button class="btn-cont" onclick="nav('store')">Seguir comprando 🛍️</button>
     </div>
   </div>
@@ -1144,6 +1226,21 @@ footer strong { color: var(--accent); }
 const LS       = 'cv_data';
 const MAX_ORD  = 100;
 const IDB_NAME = 'cv_media_db';
+
+/* ── EMAIL CONFIG (EmailJS) ──────────────────────────────────────
+   Para activar envío automático de correos de confirmación:
+   1. Crea cuenta gratis en https://www.emailjs.com/
+   2. Conecta tu cuenta Gmail/Outlook en "Email Services"
+   3. Crea una plantilla en "Email Templates" con estas variables:
+        {{to_name}}  {{to_email}}  {{order_num}}
+        {{items}}    {{delivery}}  {{payment}}
+        {{total}}    {{transfer_note}}
+   4. Pega aquí las credenciales que te entrega EmailJS:
+   ──────────────────────────────────────────────────────────────── */
+const EMAILJS_PUBLIC_KEY   = '';   // "Public Key" desde Account → API Keys
+const EMAILJS_SERVICE_ID   = '';   // ID del servicio, ej: 'service_gmail'
+const EMAILJS_TEMPLATE_ID  = '';   // ID de la plantilla, ej: 'template_orden'
+const STORE_EMAIL_CONTACT  = 'ialvarez1511@gmail.com'; // correo visible en emails
 
 /* ── INDEXEDDB (solo lectura en la tienda) ── */
 let _idb = null;
@@ -1226,6 +1323,73 @@ function toast(msg, type='') {
 function clp(n)  { return '$'+Number(n).toLocaleString('es-CL'); }
 function oNum(n) { return 'P'+String(n).padStart(2,'0'); }
 
+/* Devuelve el precio unitario según cantidad (retail o mayorista) */
+function getUnitPrice(product, qty) {
+  if (product.wholesalePrice > 0 && product.wholesaleMin > 0 && qty >= product.wholesaleMin) {
+    return product.wholesalePrice;
+  }
+  return product.price;
+}
+
+/* Info de mayorista para mostrar en tarjeta */
+function wsInfo(p) {
+  if (!p.wholesalePrice || !p.wholesaleMin) return '';
+  return `<div class="prod-ws-info">📦 Mayorista: <strong>${clp(p.wholesalePrice)}</strong> desde ${p.wholesaleMin} unid.</div>`;
+}
+
+/* ── EMAIL CONFIRMATION ── */
+function sendConfirmationEmail(order) {
+  // Sin credenciales → no intentar
+  if (!EMAILJS_PUBLIC_KEY || !EMAILJS_SERVICE_ID || !EMAILJS_TEMPLATE_ID) return;
+
+  try { emailjs.init(EMAILJS_PUBLIC_KEY); } catch(e) { return; }
+
+  const isTransfer = order.payment === 'transferencia';
+  const isPresencial = order.customer.delivery === 'presencial';
+
+  // Texto de items
+  const itemsText = order.items.map(it => {
+    const ws = it.unitPrice < it.originalPrice ? ' (precio mayorista)' : '';
+    return `• ${it.name} × ${it.qty} = ${clp(it.sub)}${ws}`;
+  }).join('\n');
+
+  // Nota de transferencia
+  let transferNote = '';
+  if (isTransfer) {
+    transferNote = isPresencial
+      ? `Al momento del retiro tendrás los datos de transferencia disponibles. Recuerda escribir tu número de pedido "${order.num}" en el mensaje de la transferencia.`
+      : `Por favor realiza la transferencia con los datos que te enviamos y escribe tu número de pedido "${order.num}" en el mensaje de la transferencia para que podamos identificar tu pago.`;
+  }
+
+  const payLabel = order.payment === 'webpay'
+    ? 'WebPay (débito / crédito)'
+    : (isPresencial ? 'Transferencia en el lugar' : 'Transferencia bancaria');
+
+  const delLabel = isPresencial
+    ? 'Retiro presencial metro · previa coordinación'
+    : `Envío a domicilio → ${order.customer.addr}`;
+
+  emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+    to_name:        order.customer.name,
+    to_email:       order.customer.email,
+    order_num:      order.num,
+    items:          itemsText,
+    delivery:       delLabel,
+    payment:        payLabel,
+    total:          clp(order.total),
+    transfer_note:  transferNote,
+    store_email:    STORE_EMAIL_CONTACT,
+  }).then(() => {
+    const notice = document.getElementById('confEmailNotice');
+    if (notice) {
+      notice.style.display = 'block';
+      notice.textContent = `📧 Enviamos un correo de confirmación a ${order.customer.email}`;
+    }
+  }).catch(() => {
+    // Silencio: no mostrar error al cliente si el email falla
+  });
+}
+
 /* ── PRODUCTS ── */
 // Track blob URLs to revoke them on re-render
 const _vidUrls = new Map();
@@ -1256,6 +1420,7 @@ async function renderProducts() {
         <div class="prod-stock" style="color:${p.stock>0?'var(--green)':'var(--red)'}">
           ${p.stock>0?`✅ ${p.stock} disponibles`:'❌ Sin stock'}
         </div>
+        ${wsInfo(p)}
         <div class="prod-foot">
           <div class="prod-price">${clp(p.price)}</div>
           <button class="btn-add" ${p.stock===0?'disabled':''}
@@ -1318,8 +1483,25 @@ function renderCart() {
   const itemsHtml = S.cart.map(item=>{
     const p = S.products.find(x=>x.id===item.pid);
     if(!p) return '';
-    const sub = p.price*item.qty;
+    const unitPrice = getUnitPrice(p, item.qty);
+    const sub = unitPrice * item.qty;
     total += sub;
+
+    // Badge/hint mayorista
+    let wsBadge = '';
+    if (p.wholesalePrice > 0 && p.wholesaleMin > 0) {
+      if (item.qty >= p.wholesaleMin) {
+        wsBadge = `<div><span class="ws-applied">✅ Precio mayorista aplicado</span></div>`;
+      } else {
+        const diff = p.wholesaleMin - item.qty;
+        wsBadge = `<div><span class="ws-hint">➕ Agrega ${diff} más para precio mayorista</span></div>`;
+      }
+    }
+
+    const unitLabel = unitPrice < p.price
+      ? `${clp(unitPrice)} c/u <s style="opacity:.5;font-size:.7rem">${clp(p.price)}</s>`
+      : `${clp(unitPrice)} c/u`;
+
     return `
       <div class="cart-item">
         <div class="ci-thumb">
@@ -1327,12 +1509,13 @@ function renderCart() {
         </div>
         <div>
           <div class="ci-name">${p.name}</div>
-          <div class="ci-unit">${clp(p.price)} c/u</div>
+          <div class="ci-unit">${unitLabel}</div>
           <div class="qty-ctrl">
             <button class="qty-btn" onclick="chgQty(${p.id},-1)">−</button>
             <span class="qty-val">${item.qty}</span>
             <button class="qty-btn" onclick="chgQty(${p.id},1)">+</button>
           </div>
+          ${wsBadge}
         </div>
         <div class="ci-right">
           <div class="ci-subtotal">${clp(sub)}</div>
@@ -1384,15 +1567,19 @@ function goCheckout() {
 
 /* ── CHECKOUT ── */
 function renderSummary() {
-  let total=0;
-  const html=S.cart.map(item=>{
-    const p=S.products.find(x=>x.id===item.pid);
-    if(!p)return'';
-    const sub=p.price*item.qty; total+=sub;
-    return `<div class="sum-row"><span>${p.name} × ${item.qty}</span><span>${clp(sub)}</span></div>`;
+  let total = 0;
+  const html = S.cart.map(item => {
+    const p = S.products.find(x => x.id === item.pid);
+    if (!p) return '';
+    const unitPrice = getUnitPrice(p, item.qty);
+    const sub = unitPrice * item.qty;
+    total += sub;
+    const wsTag = unitPrice < p.price
+      ? ` <span class="ws-applied" style="font-size:.68rem;padding:1px 6px">📦 mayorista</span>` : '';
+    return `<div class="sum-row"><span>${p.name} × ${item.qty}${wsTag}</span><span>${clp(sub)}</span></div>`;
   }).join('');
-  document.getElementById('sumItems').innerHTML=html;
-  document.getElementById('sumTotal').textContent=clp(total);
+  document.getElementById('sumItems').innerHTML = html;
+  document.getElementById('sumTotal').textContent = clp(total);
 }
 
 function selectDel(type) {
@@ -1438,54 +1625,80 @@ function placeOrder() {
   if(!S.payment)  {toast('Selecciona método de pago','err');return;}
   if(S.nextN>MAX_ORD){toast('Límite de pedidos alcanzado','err');return;}
 
-  let total=0;
-  const items=S.cart.map(item=>{
-    const p=S.products.find(x=>x.id===item.pid);
-    const sub=p.price*item.qty; total+=sub;
-    return {pid:p.id,name:p.name,price:p.price,qty:item.qty,sub};
+  let total = 0;
+  const items = S.cart.map(item => {
+    const p = S.products.find(x => x.id === item.pid);
+    const unitPrice     = getUnitPrice(p, item.qty);
+    const originalPrice = p.price;
+    const sub = unitPrice * item.qty;
+    total += sub;
+    return {pid:p.id, name:p.name, price:unitPrice, unitPrice, originalPrice, qty:item.qty, sub};
   });
 
-  const order={
-    num: oNum(S.nextN),
+  const order = {
+    num:    oNum(S.nextN),
     numIdx: S.nextN,
-    date: new Date().toLocaleDateString('es-CL'),
-    time: new Date().toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}),
-    customer:{name,rut,email,phone,delivery:S.delivery,addr:S.delivery==='envio'?addr:'Retiro presencial metro · previa coordinación'},
-    items, payment:S.payment, total, status:'pendiente'
+    date:   new Date().toLocaleDateString('es-CL'),
+    time:   new Date().toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}),
+    customer: {
+      name, rut, email, phone,
+      delivery: S.delivery,
+      addr: S.delivery === 'envio' ? addr : 'Retiro presencial metro · previa coordinación'
+    },
+    items, payment: S.payment, total, status: 'pendiente'
   };
 
   // Descontar stock
-  items.forEach(it=>{
-    const p=S.products.find(x=>x.id===it.pid);
-    if(p) p.stock=Math.max(0,p.stock-it.qty);
+  items.forEach(it => {
+    const p = S.products.find(x => x.id === it.pid);
+    if (p) p.stock = Math.max(0, p.stock - it.qty);
   });
 
   S.orders.push(order);
   S.nextN++;
-  S.cart=[];
+  S.cart = [];
   save(); updateBadge(); renderProducts();
 
-  // Confirmación
+  // ── Página de confirmación ──
   document.getElementById('confNum').textContent = order.num;
 
-  const delLabel = S.delivery==='presencial'
+  const delLabel = S.delivery === 'presencial'
     ? '🏪 Retiro presencial metro · previa coordinación'
     : '📦 Envío a domicilio';
-  const payLabel = S.payment==='webpay'
+  const payLabel = S.payment === 'webpay'
     ? '💳 WebPay'
-    : (S.delivery==='presencial' ? '🏪 Transferencia en el lugar' : '🏦 Transferencia ahora');
+    : (S.delivery === 'presencial' ? '🏪 Transferencia en el lugar' : '🏦 Transferencia bancaria');
 
-  const rows=[
+  const rows = [
     ['Cliente',  name],
     ['Correo',   email],
     ['Teléfono', phone],
     ['Entrega',  delLabel],
-    ...(S.delivery==='envio'?[['Dirección',addr]]:[]),
+    ...(S.delivery === 'envio' ? [['Dirección', addr]] : []),
     ['Pago',     payLabel],
     ['Total',    `<span style="color:var(--accent)">${clp(total)}</span>`],
-  ].map(([k,v])=>`<div class="conf-row"><span class="ck">${k}</span><span class="cv">${v}</span></div>`).join('');
+  ].map(([k,v]) => `<div class="conf-row"><span class="ck">${k}</span><span class="cv">${v}</span></div>`).join('');
 
   document.getElementById('confRows').innerHTML = rows;
+
+  // ── Caja de transferencia en confirmación ──
+  const transferBox = document.getElementById('confTransfer');
+  const emailNotice = document.getElementById('confEmailNotice');
+  if (emailNotice) emailNotice.style.display = 'none';
+
+  if (S.payment === 'transferencia') {
+    transferBox.style.display = 'block';
+    document.getElementById('confTransferNum').textContent = order.num;
+    document.getElementById('confTransferMsg').textContent = S.delivery === 'presencial'
+      ? 'Puedes pagar cuando vengas a retirar al metro. Aquí están los datos para referencia:'
+      : 'Realiza la transferencia con estos datos y adjunta el comprobante:';
+  } else {
+    transferBox.style.display = 'none';
+  }
+
+  // ── Envío de email ──
+  sendConfirmationEmail(order);
+
   nav('confirmation');
   toast(`✅ Pedido ${order.num} confirmado!`, 'ok');
 }
@@ -1513,6 +1726,19 @@ async function openProductDetail(pid) {
   document.getElementById('pdStock').innerHTML   = p.stock > 0
     ? `<span style="color:var(--green)">✅ ${p.stock} disponibles</span>`
     : `<span style="color:var(--red)">❌ Sin stock</span>`;
+
+  // Info mayorista en el modal
+  let pdWsEl = document.getElementById('pdWsInfo');
+  if (!pdWsEl) {
+    pdWsEl = document.createElement('div');
+    pdWsEl.id = 'pdWsInfo';
+    document.getElementById('pdDesc').insertAdjacentElement('afterend', pdWsEl);
+  }
+  pdWsEl.innerHTML = (p.wholesalePrice > 0 && p.wholesaleMin > 0)
+    ? `<div class="prod-ws-info" style="font-size:.82rem;margin-bottom:.5rem">
+        📦 <strong>Precio mayorista: ${clp(p.wholesalePrice)}</strong> por unidad comprando ${p.wholesaleMin} o más.
+       </div>`
+    : '';
 
   const addBtn = document.getElementById('pdAddBtn');
   addBtn.disabled      = p.stock === 0;
