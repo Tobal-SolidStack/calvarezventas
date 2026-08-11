@@ -736,6 +736,151 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 }
 .btn-cont:hover { background: var(--acc-h); }
 
+/* ══════════════════════════════════════════ PRODUCT DETAIL MODAL */
+.pd-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  backdrop-filter: blur(6px);
+  z-index: 250;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.pd-overlay.open { display: flex; }
+
+.pd-box {
+  background: var(--surf);
+  border: 1px solid var(--brd2);
+  border-radius: 20px;
+  width: 520px;
+  max-width: 100%;
+  max-height: 92vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+  position: relative;
+  animation: pdIn .25s cubic-bezier(.4,0,.2,1);
+}
+@keyframes pdIn {
+  from { opacity:0; transform:scale(.94) translateY(12px); }
+  to   { opacity:1; transform:scale(1)   translateY(0); }
+}
+
+.pd-close {
+  position: absolute;
+  top: 12px; right: 12px;
+  background: rgba(0,0,0,0.45);
+  border: none;
+  color: #fff;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10;
+  transition: background var(--t);
+}
+.pd-close:hover { background: rgba(0,0,0,0.7); }
+
+/* Media area */
+.pd-media {
+  width: 100%;
+  height: 320px;
+  background: var(--surf2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 20px 20px 0 0;
+  position: relative;
+}
+.pd-media img   { width:100%; height:100%; object-fit:contain; }
+.pd-media video { width:100%; height:100%; object-fit:contain; background:#000; }
+.pd-media-emoji { font-size: 7rem; }
+
+/* Media navigation tabs */
+.pd-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 10px 1.4rem 0;
+  background: var(--surf);
+}
+.pd-tab {
+  flex: 1;
+  padding: 9px;
+  background: var(--surf2);
+  border: 1.5px solid var(--brd);
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: .84rem;
+  font-weight: 700;
+  color: var(--muted);
+  transition: all var(--t);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.pd-tab:hover { border-color: var(--acc-dk); color: var(--txt); }
+.pd-tab.active {
+  background: var(--acc-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Product info */
+.pd-info {
+  padding: 1.3rem 1.5rem 1.6rem;
+}
+.pd-name {
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: var(--txt);
+  margin-bottom: .4rem;
+}
+.pd-desc {
+  font-size: .88rem;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+.pd-stock-row {
+  font-size: .82rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+.pd-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 1rem;
+}
+.pd-price {
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: var(--accent);
+}
+.pd-add-btn {
+  background: linear-gradient(135deg, var(--accent), var(--acc-dk));
+  color: #0a0800;
+  border: none;
+  padding: 11px 22px;
+  border-radius: 10px;
+  font-size: .92rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: opacity var(--t), transform var(--t);
+  box-shadow: 0 3px 12px var(--acc-glow);
+  white-space: nowrap;
+}
+.pd-add-btn:hover { opacity:.88; transform:translateY(-1px); }
+.pd-add-btn:disabled { background:var(--surf2); color:var(--muted); cursor:not-allowed; box-shadow:none; transform:none; }
+
+/* Make product card clickable */
+.prod-card { cursor: pointer; }
+
 /* ══════════════════════════════════════════ FOOTER */
 footer {
   background: var(--hdr);
@@ -826,6 +971,33 @@ footer strong { color: var(--accent); }
         <span class="ct-val" id="cartTotalVal">$0</span>
       </div>
       <button class="btn-checkout" onclick="goCheckout()">Ir al Pago →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ PRODUCT DETAIL MODAL ════════════ -->
+<div class="pd-overlay" id="pdModal" onclick="pdOverlayClick(event)">
+  <div class="pd-box">
+    <button class="pd-close" onclick="closePD()">✕</button>
+
+    <!-- Media -->
+    <div class="pd-media" id="pdMedia"></div>
+
+    <!-- Tabs foto / video -->
+    <div class="pd-tabs" id="pdTabs" style="display:none">
+      <button class="pd-tab active" id="pdTabPhoto" onclick="pdShowPhoto()">📷 Foto</button>
+      <button class="pd-tab"        id="pdTabVideo" onclick="pdShowVideo()">🎬 Video</button>
+    </div>
+
+    <!-- Info -->
+    <div class="pd-info">
+      <div class="pd-name"  id="pdName"></div>
+      <div class="pd-desc"  id="pdDesc"></div>
+      <div class="pd-stock-row" id="pdStock"></div>
+      <div class="pd-foot">
+        <span class="pd-price" id="pdPrice"></span>
+        <button class="pd-add-btn" id="pdAddBtn" onclick="pdAddCart()">🛒 Agregar al carrito</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1079,7 +1251,7 @@ async function renderProducts() {
     }
 
     return `
-    <div class="prod-card">
+    <div class="prod-card" onclick="openProductDetail(${p.id})" title="Ver detalles">
       <div class="prod-img" id="pimg_${p.id}">${mediaHtml}</div>
       <div class="prod-body">
         <div class="prod-name">${p.name}</div>
@@ -1089,7 +1261,8 @@ async function renderProducts() {
         </div>
         <div class="prod-foot">
           <div class="prod-price">${clp(p.price)}</div>
-          <button class="btn-add" ${p.stock===0?'disabled':''} onclick="addCart(${p.id})">
+          <button class="btn-add" ${p.stock===0?'disabled':''}
+            onclick="event.stopPropagation(); addCart(${p.id})">
             ${p.stock===0?'Sin stock':'🛒 Agregar'}
           </button>
         </div>
@@ -1346,6 +1519,116 @@ function placeOrder() {
   document.getElementById('confRows').innerHTML = rows;
   nav('confirmation');
   toast(`✅ Pedido ${order.num} confirmado!`, 'ok');
+}
+
+/* ══════════════════════════════════════
+   PRODUCT DETAIL MODAL
+   ══════════════════════════════════════ */
+let _pdProd    = null;  // current product in modal
+let _pdVidUrl  = null;  // blob URL for video
+
+function pdOverlayClick(e) {
+  if (e.target === document.getElementById('pdModal')) closePD();
+}
+
+async function openProductDetail(pid) {
+  const p = S.products.find(x => x.id === pid);
+  if (!p) return;
+  _pdProd   = p;
+  _pdVidUrl = null;
+
+  // Fill info
+  document.getElementById('pdName').textContent  = p.name;
+  document.getElementById('pdDesc').textContent  = p.desc || '';
+  document.getElementById('pdPrice').textContent = clp(p.price);
+  document.getElementById('pdStock').innerHTML   = p.stock > 0
+    ? `<span style="color:var(--green)">✅ ${p.stock} disponibles</span>`
+    : `<span style="color:var(--red)">❌ Sin stock</span>`;
+
+  const addBtn = document.getElementById('pdAddBtn');
+  addBtn.disabled      = p.stock === 0;
+  addBtn.textContent   = p.stock === 0 ? 'Sin stock' : '🛒 Agregar al carrito';
+
+  // Show photo first
+  _pdSetPhoto(p);
+
+  // Tabs: show only if product has video
+  const tabs = document.getElementById('pdTabs');
+  if (p.hasVideo) {
+    tabs.style.display = 'flex';
+    document.getElementById('pdTabPhoto').classList.add('active');
+    document.getElementById('pdTabVideo').classList.remove('active');
+
+    // Pre-load video blob in background (don't await — show modal immediately)
+    idbGet(`vid_${p.id}`).then(blob => {
+      if (blob) {
+        if (_pdVidUrl) URL.revokeObjectURL(_pdVidUrl);
+        _pdVidUrl = URL.createObjectURL(blob);
+        // If user already clicked the video tab, load it now
+        const vTab = document.getElementById('pdTabVideo');
+        if (vTab && vTab.classList.contains('active')) _pdSetVideo();
+      }
+    }).catch(() => {});
+  } else {
+    tabs.style.display = 'none';
+  }
+
+  document.getElementById('pdModal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closePD() {
+  document.getElementById('pdModal').classList.remove('open');
+  document.body.style.overflow = '';
+  // Pause any playing video
+  const v = document.querySelector('#pdMedia video');
+  if (v) { v.pause(); v.src = ''; }
+}
+
+/* ── Foto ── */
+function pdShowPhoto() {
+  document.getElementById('pdTabPhoto').classList.add('active');
+  document.getElementById('pdTabVideo').classList.remove('active');
+  _pdSetPhoto(_pdProd);
+}
+
+function _pdSetPhoto(p) {
+  const m = document.getElementById('pdMedia');
+  if (p.img) {
+    m.innerHTML = `<img src="${p.img}" alt="${p.name}">`;
+  } else {
+    m.innerHTML = `<span class="pd-media-emoji">${p.emoji || '📦'}</span>`;
+  }
+}
+
+/* ── Video ── */
+function pdShowVideo() {
+  document.getElementById('pdTabVideo').classList.add('active');
+  document.getElementById('pdTabPhoto').classList.remove('active');
+  _pdSetVideo();
+}
+
+function _pdSetVideo() {
+  const m = document.getElementById('pdMedia');
+  if (_pdVidUrl) {
+    m.innerHTML = `
+      <video src="${_pdVidUrl}" controls autoplay
+        style="width:100%;height:100%;object-fit:contain;background:#000;border-radius:20px 20px 0 0">
+      </video>`;
+  } else {
+    m.innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--muted)">
+        <span style="font-size:2.5rem">⏳</span>
+        <span style="font-size:.85rem">Cargando video…</span>
+      </div>`;
+  }
+}
+
+/* ── Agregar desde modal ── */
+function pdAddCart() {
+  if (!_pdProd) return;
+  addCart(_pdProd.id);
+  closePD();
 }
 
 /* ── INIT ── */
