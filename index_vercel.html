@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CalvarezVentas</title>
-<!-- EmailJS para envío automático de correos de confirmación -->
+<!-- Supabase — base de datos en la nube -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- EmailJS — correos de confirmación automáticos -->
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
 /* ══════════════════════════════════════════
@@ -1222,71 +1224,85 @@ footer strong { color: var(--accent); }
      JAVASCRIPT
      ════════════════════════════════ -->
 <script>
-/* ── CONFIG ── */
-const LS       = 'cv_data';
-const MAX_ORD  = 100;
-const IDB_NAME = 'cv_media_db';
+/* ════════════════════════════════════════════════════════════════
+   SUPABASE CONFIG
+   1. Crea tu proyecto en https://supabase.com (gratis)
+   2. Settings → API → copia URL y anon key
+   ════════════════════════════════════════════════════════════════ */
+const SUPABASE_URL = '';  // 'https://xxx.supabase.co'
+const SUPABASE_KEY = '';  // 'eyJ...' (anon public key)
 
-/* ── EMAIL CONFIG (EmailJS) ──────────────────────────────────────
-   Para activar envío automático de correos de confirmación:
-   1. Crea cuenta gratis en https://www.emailjs.com/
-   2. Conecta tu cuenta Gmail/Outlook en "Email Services"
-   3. Crea una plantilla en "Email Templates" con estas variables:
-        {{to_name}}  {{to_email}}  {{order_num}}
-        {{items}}    {{delivery}}  {{payment}}
-        {{total}}    {{transfer_note}}
-   4. Pega aquí las credenciales que te entrega EmailJS:
-   ──────────────────────────────────────────────────────────────── */
-const EMAILJS_PUBLIC_KEY   = '';   // "Public Key" desde Account → API Keys
-const EMAILJS_SERVICE_ID   = '';   // ID del servicio, ej: 'service_gmail'
-const EMAILJS_TEMPLATE_ID  = '';   // ID de la plantilla, ej: 'template_orden'
-const STORE_EMAIL_CONTACT  = 'ialvarez1511@gmail.com'; // correo visible en emails
+/* ════════════════════════════════════════════════════════════════
+   EMAILJS CONFIG  (opcional — para correos automáticos)
+   ════════════════════════════════════════════════════════════════ */
+const EMAILJS_PUBLIC_KEY  = '';
+const EMAILJS_SERVICE_ID  = '';
+const EMAILJS_TEMPLATE_ID = '';
+const STORE_EMAIL_CONTACT = 'ialvarez1511@gmail.com';
 
-/* ── INDEXEDDB (solo lectura en la tienda) ── */
-let _idb = null;
-function openIDB() {
-  if (_idb) return Promise.resolve(_idb);
-  return new Promise((res,rej) => {
-    const req = indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore('media',{keyPath:'key'});
-    req.onsuccess = e => { _idb = e.target.result; res(_idb); };
-    req.onerror   = e => rej(e);
-  });
-}
-async function idbGet(key) {
-  try {
-    await openIDB();
-    return new Promise((res,rej) => {
-      const req = _idb.transaction('media','readonly').objectStore('media').get(key);
-      req.onsuccess = e => res(e.target.result?.blob || null);
-      req.onerror   = e => rej(e);
-    });
-  } catch(e) { return null; }
-}
+const CART_LS = 'cv_cart';  // solo el carrito se guarda en localStorage
 
-/* ── STATE ── */
+/* ── Supabase client ── */
+const _sb = (SUPABASE_URL && SUPABASE_KEY)
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
+  : null;
+
+/* ════════════════════════════════════════
+   STATE
+   ════════════════════════════════════════ */
 let S = {
-  products:   [],
-  cart:       [],
-  orders:     [],
-  nextN:      1,
-  delivery:   null,
-  payment:    null,
+  products: [],
+  cart:     [],
+  delivery: null,
+  payment:  null,
 };
 
-/* ── PERSIST ── */
-function load() {
-  try { const r = localStorage.getItem(LS); if(r) S = {...S,...JSON.parse(r)}; } catch(e){}
-  if (!S.products.length) {
+/* ════════════════════════════════════════
+   SUPABASE HELPERS
+   ════════════════════════════════════════ */
+function mapProduct(row) {
+  return {
+    id:             row.id,
+    name:           row.name,
+    desc:           row.description || '',
+    price:          row.price,
+    wholesalePrice: row.wholesale_price  || 0,
+    wholesaleMin:   row.wholesale_min    || 0,
+    stock:          row.stock,
+    emoji:          row.emoji || '📦',
+    img:            row.img_url   || '',
+    videoUrl:       row.video_url || '',
+    hasVideo:       row.has_video || false,
+  };
+}
+
+/* ════════════════════════════════════════
+   LOAD / SAVE
+   ════════════════════════════════════════ */
+async function load() {
+  // Carrito desde localStorage (estado temporal del usuario)
+  try {
+    const c = localStorage.getItem(CART_LS);
+    if (c) S.cart = JSON.parse(c);
+  } catch(e) { S.cart = []; }
+
+  // Productos desde Supabase (o demo si no está configurado)
+  if (_sb) {
+    const { data, error } = await _sb.from('products').select('*').order('id');
+    if (data)  S.products = data.map(mapProduct);
+    if (error) console.warn('Supabase error:', error.message);
+  } else {
     S.products = [
-      {id:1,name:'Producto Ejemplo A',desc:'Edita este producto desde el panel Admin.',price:9990, stock:20,img:'',emoji:'📱'},
-      {id:2,name:'Producto Ejemplo B',desc:'Agrega imagen, precio y stock personalizado.',price:14990,stock:15,img:'',emoji:'👟'},
-      {id:3,name:'Producto Ejemplo C',desc:'Gestiona tu catálogo completo desde /admin.',price:24990,stock:8, img:'',emoji:'🎧'},
+      {id:1, name:'Producto Ejemplo A', desc:'Configura Supabase para gestionar productos reales.', price:9990,  wholesalePrice:0, wholesaleMin:0, stock:20, img:'', emoji:'📱', hasVideo:false, videoUrl:''},
+      {id:2, name:'Producto Ejemplo B', desc:'Agrega imagen y video desde el admin.',               price:14990, wholesalePrice:0, wholesaleMin:0, stock:15, img:'', emoji:'👟', hasVideo:false, videoUrl:''},
+      {id:3, name:'Producto Ejemplo C', desc:'Gestiona tu catálogo completo.',                      price:24990, wholesalePrice:0, wholesaleMin:0, stock:8,  img:'', emoji:'🎧', hasVideo:false, videoUrl:''},
     ];
-    save();
   }
 }
-function save() { localStorage.setItem(LS, JSON.stringify(S)); }
+
+function saveCart() {
+  localStorage.setItem(CART_LS, JSON.stringify(S.cart));
+}
 
 /* ── THEME ── */
 function initTheme() {
@@ -1444,15 +1460,32 @@ function addCart(pid) {
   } else {
     S.cart.push({pid,qty:1});
   }
-  save(); updateBadge();
+  saveCart(); updateBadge();
   toast('✅ Agregado al carrito!','ok');
   openCart();
+}
+
+let _orderPreviewNum = 'P—';
+async function refreshOrderPreview() {
+  if (_sb) {
+    try {
+      const { data } = await _sb.from('orders').select('order_idx').order('order_idx', {ascending:false}).limit(1);
+      _orderPreviewNum = oNum((data?.length ? data[0].order_idx : 0) + 1);
+    } catch(e) { _orderPreviewNum = 'P—'; }
+  } else {
+    _orderPreviewNum = oNum(parseInt(localStorage.getItem('cv_order_counter') || '0') + 1);
+  }
 }
 
 function openCart() {
   document.getElementById('cartOverlay').classList.add('open');
   document.getElementById('cartPanel').classList.add('open');
   renderCart();
+  // Actualiza número de pedido en segundo plano
+  refreshOrderPreview().then(() => {
+    const el = document.querySelector('.op-num');
+    if (el) el.textContent = _orderPreviewNum;
+  });
 }
 
 function closeCart() {
@@ -1528,7 +1561,7 @@ function renderCart() {
   const preview = `
     <div class="order-preview">
       <div class="op-label">📋 Tu número de pedido</div>
-      <div class="op-num">${oNum(S.nextN)}</div>
+      <div class="op-num">${_orderPreviewNum}</div>
       <div class="op-note">Se asignará al confirmar tu compra</div>
     </div>`;
 
@@ -1544,12 +1577,12 @@ function chgQty(pid,d) {
   const nq=it.qty+d;
   if(nq<1){rmCart(pid);return;}
   if(nq>p.stock){toast('No hay más stock','err');return;}
-  it.qty=nq; save(); updateBadge(); renderCart();
+  it.qty=nq; saveCart(); updateBadge(); renderCart();
 }
 
 function rmCart(pid) {
   S.cart=S.cart.filter(i=>i.pid!==pid);
-  save(); updateBadge(); renderCart();
+  saveCart(); updateBadge(); renderCart();
 }
 
 function goCheckout() {
@@ -1610,116 +1643,139 @@ function refreshTransfer() {
   document.getElementById('transferSub').textContent = presencial ? 'En el lugar' : 'Ahora';
 }
 
-function placeOrder() {
+async function placeOrder() {
   const name  = document.getElementById('cName').value.trim();
   const rut   = document.getElementById('cRut').value.trim();
   const email = document.getElementById('cEmail').value.trim();
   const phone = document.getElementById('cPhone').value.trim();
   const addr  = document.getElementById('cAddr').value.trim();
 
-  if(!name)   {toast('Ingresa tu nombre','err');return;}
-  if(!email)  {toast('Ingresa tu correo','err');return;}
-  if(!phone)  {toast('Ingresa tu teléfono','err');return;}
-  if(!S.delivery) {toast('Selecciona tipo de entrega','err');return;}
-  if(S.delivery==='envio'&&!addr){toast('Ingresa la dirección de envío','err');return;}
-  if(!S.payment)  {toast('Selecciona método de pago','err');return;}
-  if(S.nextN>MAX_ORD){toast('Límite de pedidos alcanzado','err');return;}
+  if (!name)                         { toast('Ingresa tu nombre','err');            return; }
+  if (!email)                        { toast('Ingresa tu correo','err');             return; }
+  if (!phone)                        { toast('Ingresa tu teléfono','err');           return; }
+  if (!S.delivery)                   { toast('Selecciona tipo de entrega','err');    return; }
+  if (S.delivery==='envio' && !addr) { toast('Ingresa la dirección de envío','err'); return; }
+  if (!S.payment)                    { toast('Selecciona método de pago','err');     return; }
 
-  let total = 0;
-  const items = S.cart.map(item => {
-    const p = S.products.find(x => x.id === item.pid);
-    const unitPrice     = getUnitPrice(p, item.qty);
-    const originalPrice = p.price;
-    const sub = unitPrice * item.qty;
-    total += sub;
-    return {pid:p.id, name:p.name, price:unitPrice, unitPrice, originalPrice, qty:item.qty, sub};
-  });
+  const btnOrd = document.querySelector('.btn-order');
+  if (btnOrd) { btnOrd.disabled = true; btnOrd.textContent = '⏳ Procesando…'; }
 
-  const order = {
-    num:    oNum(S.nextN),
-    numIdx: S.nextN,
-    date:   new Date().toLocaleDateString('es-CL'),
-    time:   new Date().toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}),
-    customer: {
-      name, rut, email, phone,
-      delivery: S.delivery,
-      addr: S.delivery === 'envio' ? addr : 'Retiro presencial metro · previa coordinación'
-    },
-    items, payment: S.payment, total, status: 'pendiente'
-  };
+  try {
+    // ── Obtener número de pedido ──
+    let orderIdx;
+    if (_sb) {
+      const { data, error } = await _sb.rpc('get_next_order_idx');
+      if (error || data === null) throw new Error('No se pudo obtener número de pedido');
+      orderIdx = data;
+    } else {
+      orderIdx = parseInt(localStorage.getItem('cv_order_counter') || '0') + 1;
+      localStorage.setItem('cv_order_counter', String(orderIdx));
+    }
 
-  // Descontar stock
-  items.forEach(it => {
-    const p = S.products.find(x => x.id === it.pid);
-    if (p) p.stock = Math.max(0, p.stock - it.qty);
-  });
+    // ── Construir items con precios reales ──
+    let total = 0;
+    const items = S.cart.map(item => {
+      const p           = S.products.find(x => x.id === item.pid);
+      const unitPrice   = getUnitPrice(p, item.qty);
+      const sub         = unitPrice * item.qty;
+      total += sub;
+      return {pid:p.id, name:p.name, price:unitPrice, unitPrice, originalPrice:p.price, qty:item.qty, sub};
+    });
 
-  S.orders.push(order);
-  S.nextN++;
-  S.cart = [];
-  save(); updateBadge(); renderProducts();
+    const orderNum = oNum(orderIdx);
+    const order = {
+      num: orderNum, numIdx: orderIdx,
+      date: new Date().toLocaleDateString('es-CL'),
+      time: new Date().toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}),
+      customer: { name, rut, email, phone, delivery:S.delivery,
+        addr: S.delivery==='envio' ? addr : 'Retiro presencial metro · previa coordinación' },
+      items, payment:S.payment, total, status:'pendiente'
+    };
 
-  // ── Página de confirmación ──
-  document.getElementById('confNum').textContent = order.num;
+    // ── Guardar en Supabase ──
+    if (_sb) {
+      const { error: ordErr } = await _sb.from('orders').insert([{
+        order_num: orderNum, order_idx: orderIdx,
+        customer_name:  name,  customer_rut:   rut,
+        customer_email: email, customer_phone: phone,
+        delivery_type: S.delivery, addr: order.customer.addr,
+        payment: S.payment, items, total, status:'pendiente'
+      }]);
+      if (ordErr) throw new Error('Error al guardar el pedido: ' + ordErr.message);
 
-  const delLabel = S.delivery === 'presencial'
-    ? '🏪 Retiro presencial metro · previa coordinación'
-    : '📦 Envío a domicilio';
-  const payLabel = S.payment === 'webpay'
-    ? '💳 WebPay'
-    : (S.delivery === 'presencial' ? '🏪 Transferencia en el lugar' : '🏦 Transferencia bancaria');
+      // Descontar stock (en paralelo)
+      await Promise.all(items.map(it => _sb.rpc('decrement_stock', {p_id: it.pid, p_qty: it.qty})));
 
-  const rows = [
-    ['Cliente',  name],
-    ['Correo',   email],
-    ['Teléfono', phone],
-    ['Entrega',  delLabel],
-    ...(S.delivery === 'envio' ? [['Dirección', addr]] : []),
-    ['Pago',     payLabel],
-    ['Total',    `<span style="color:var(--accent)">${clp(total)}</span>`],
-  ].map(([k,v]) => `<div class="conf-row"><span class="ck">${k}</span><span class="cv">${v}</span></div>`).join('');
+      // Recargar productos con stock actualizado
+      const { data: updProds } = await _sb.from('products').select('*').order('id');
+      if (updProds) S.products = updProds.map(mapProduct);
+    } else {
+      // Demo: decrement en memoria
+      items.forEach(it => {
+        const p = S.products.find(x => x.id === it.pid);
+        if (p) p.stock = Math.max(0, p.stock - it.qty);
+      });
+    }
 
-  document.getElementById('confRows').innerHTML = rows;
+    S.cart = [];
+    saveCart(); updateBadge(); renderProducts();
 
-  // ── Caja de transferencia en confirmación ──
-  const transferBox = document.getElementById('confTransfer');
-  const emailNotice = document.getElementById('confEmailNotice');
-  if (emailNotice) emailNotice.style.display = 'none';
+    // ── Página de confirmación ──
+    document.getElementById('confNum').textContent = orderNum;
 
-  if (S.payment === 'transferencia') {
-    transferBox.style.display = 'block';
-    document.getElementById('confTransferNum').textContent = order.num;
-    document.getElementById('confTransferMsg').textContent = S.delivery === 'presencial'
-      ? 'Puedes pagar cuando vengas a retirar al metro. Aquí están los datos para referencia:'
-      : 'Realiza la transferencia con estos datos y adjunta el comprobante:';
-  } else {
-    transferBox.style.display = 'none';
+    const delLabel = S.delivery==='presencial'
+      ? '🏪 Retiro presencial metro · previa coordinación' : '📦 Envío a domicilio';
+    const payLabel = S.payment==='webpay'
+      ? '💳 WebPay' : (S.delivery==='presencial' ? '🏪 Transferencia en el lugar' : '🏦 Transferencia bancaria');
+
+    document.getElementById('confRows').innerHTML = [
+      ['Cliente', name], ['Correo', email], ['Teléfono', phone], ['Entrega', delLabel],
+      ...(S.delivery==='envio' ? [['Dirección', addr]] : []),
+      ['Pago', payLabel], ['Total', `<span style="color:var(--accent)">${clp(total)}</span>`],
+    ].map(([k,v]) => `<div class="conf-row"><span class="ck">${k}</span><span class="cv">${v}</span></div>`).join('');
+
+    // Caja de transferencia en confirmación
+    const transferBox = document.getElementById('confTransfer');
+    const emailNotice = document.getElementById('confEmailNotice');
+    if (emailNotice) emailNotice.style.display = 'none';
+    if (S.payment === 'transferencia') {
+      transferBox.style.display = 'block';
+      document.getElementById('confTransferNum').textContent = orderNum;
+      document.getElementById('confTransferMsg').textContent = S.delivery==='presencial'
+        ? 'Puedes pagar cuando vengas a retirar al metro. Aquí están los datos para referencia:'
+        : 'Realiza la transferencia con estos datos y adjunta el comprobante:';
+    } else {
+      transferBox.style.display = 'none';
+    }
+
+    _orderPreviewNum = oNum(orderIdx + 1);
+    sendConfirmationEmail(order);
+    nav('confirmation');
+    toast(`✅ Pedido ${orderNum} confirmado!`, 'ok');
+
+  } catch(err) {
+    toast('Error: ' + err.message, 'err');
+  } finally {
+    if (btnOrd) { btnOrd.disabled = false; btnOrd.textContent = '✅ Confirmar Pedido'; }
   }
-
-  // ── Envío de email ──
-  sendConfirmationEmail(order);
-
-  nav('confirmation');
-  toast(`✅ Pedido ${order.num} confirmado!`, 'ok');
 }
 
 /* ══════════════════════════════════════
    PRODUCT DETAIL MODAL
    ══════════════════════════════════════ */
-let _pdProd    = null;  // current product in modal
-let _pdVidUrl  = null;  // blob URL for video
+let _pdProd   = null;
+let _pdVidUrl = null;
 
 function pdOverlayClick(e) {
   if (e.target === document.getElementById('pdModal')) closePD();
 }
 
-async function openProductDetail(pid) {
+function openProductDetail(pid) {
   const p = S.products.find(x => x.id === pid);
   if (!p) return;
   _pdProd   = p;
-  _pdVidUrl = null;
+  _pdVidUrl = p.videoUrl || null;  // URL pública de Supabase Storage (sin IDB)
 
-  // Fill info
   document.getElementById('pdName').textContent  = p.name;
   document.getElementById('pdDesc').textContent  = p.desc || '';
   document.getElementById('pdPrice').textContent = clp(p.price);
@@ -1727,7 +1783,7 @@ async function openProductDetail(pid) {
     ? `<span style="color:var(--green)">✅ ${p.stock} disponibles</span>`
     : `<span style="color:var(--red)">❌ Sin stock</span>`;
 
-  // Info mayorista en el modal
+  // Info mayorista
   let pdWsEl = document.getElementById('pdWsInfo');
   if (!pdWsEl) {
     pdWsEl = document.createElement('div');
@@ -1737,33 +1793,19 @@ async function openProductDetail(pid) {
   pdWsEl.innerHTML = (p.wholesalePrice > 0 && p.wholesaleMin > 0)
     ? `<div class="prod-ws-info" style="font-size:.82rem;margin-bottom:.5rem">
         📦 <strong>Precio mayorista: ${clp(p.wholesalePrice)}</strong> por unidad comprando ${p.wholesaleMin} o más.
-       </div>`
-    : '';
+       </div>` : '';
 
   const addBtn = document.getElementById('pdAddBtn');
-  addBtn.disabled      = p.stock === 0;
-  addBtn.textContent   = p.stock === 0 ? 'Sin stock' : '🛒 Agregar al carrito';
+  addBtn.disabled    = p.stock === 0;
+  addBtn.textContent = p.stock === 0 ? 'Sin stock' : '🛒 Agregar al carrito';
 
-  // Show photo first
   _pdSetPhoto(p);
 
-  // Tabs: show only if product has video
   const tabs = document.getElementById('pdTabs');
-  if (p.hasVideo) {
+  if (p.hasVideo && p.videoUrl) {
     tabs.style.display = 'flex';
     document.getElementById('pdTabPhoto').classList.add('active');
     document.getElementById('pdTabVideo').classList.remove('active');
-
-    // Pre-load video blob in background (don't await — show modal immediately)
-    idbGet(`vid_${p.id}`).then(blob => {
-      if (blob) {
-        if (_pdVidUrl) URL.revokeObjectURL(_pdVidUrl);
-        _pdVidUrl = URL.createObjectURL(blob);
-        // If user already clicked the video tab, load it now
-        const vTab = document.getElementById('pdTabVideo');
-        if (vTab && vTab.classList.contains('active')) _pdSetVideo();
-      }
-    }).catch(() => {});
   } else {
     tabs.style.display = 'none';
   }
@@ -1827,11 +1869,13 @@ function pdAddCart() {
 }
 
 /* ── INIT ── */
-load();
-initTheme();
-renderProducts(); // async, loads videos in background
-updateBadge();
-openIDB().catch(()=>{}); // pre-open IndexedDB
+(async () => {
+  initTheme();
+  await load();
+  await renderProducts();
+  updateBadge();
+  await refreshOrderPreview();
+})();
 </script>
 </body>
 </html>

@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — CalvarezVentas</title>
+<!-- Supabase -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root {
   --bg:        #060912;
@@ -243,7 +245,8 @@ input::placeholder,textarea::placeholder{color:var(--muted);}
     </div>
     <div class="hdr-right">
       <button class="btn-theme" id="themeBtn" onclick="toggleTheme()">☀️</button>
-      <a class="btn-store" href="index.html">← Volver a la tienda</a>
+      <button class="btn-store" id="btnLogout" onclick="doLogout()" style="display:none;cursor:pointer;border:1px solid var(--brd2);background:var(--surf2);color:var(--txt);padding:7px 14px;border-radius:8px;font-size:.82rem;font-weight:700">🚪 Salir</button>
+      <a class="btn-store" href="index.html">← Tienda</a>
     </div>
   </div>
 </header>
@@ -253,7 +256,11 @@ input::placeholder,textarea::placeholder{color:var(--muted);}
   <div class="login-box">
     <span class="lock">🔐</span>
     <h2>Panel de Administración</h2>
-    <p>Ingresa la contraseña para acceder</p>
+    <p>Ingresa con tu cuenta de administrador</p>
+    <div class="fgroup">
+      <input type="email" id="emailInput" placeholder="admin@calvarezventas.cl"
+             onkeydown="if(event.key==='Enter') document.getElementById('passInput').focus()">
+    </div>
     <div class="fgroup">
       <input type="password" id="passInput" placeholder="Contraseña"
              onkeydown="if(event.key==='Enter') doLogin()">
@@ -393,7 +400,7 @@ input::placeholder,textarea::placeholder{color:var(--muted);}
       </div>
 
       <div class="vid-info">
-        ℹ️ Los videos se guardan en tu navegador (IndexedDB). Si abres el panel admin en otro dispositivo, los videos no aparecerán — solo las fotos y datos de productos.
+        ☁️ Los videos se suben a Supabase Storage y quedan disponibles en todos los dispositivos con una URL pública.
       </div>
     </div>
 
@@ -407,172 +414,175 @@ input::placeholder,textarea::placeholder{color:var(--muted);}
 <div class="toast" id="toast"></div>
 
 <script>
-/* ══ CONFIG ══ */
-const ADMIN_PASS = 'admin123';
-const LS         = 'cv_data';
-const IDB_NAME   = 'cv_media_db';
+/* ══════════════════════════════════════════════════════════════
+   SUPABASE CONFIG — igual que en index.html
+   ══════════════════════════════════════════════════════════════ */
+const SUPABASE_URL = '';  // 'https://xxx.supabase.co'
+const SUPABASE_KEY = '';  // 'eyJ...' (anon public key)
+const STORAGE_BUCKET = 'product-media';
 
-/* ══ STATE ══ */
-let S   = {products:[],cart:[],orders:[],nextN:1};
-let idb = null;
+const _sb = (SUPABASE_URL && SUPABASE_KEY)
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
+  : null;
 
-/* ══ MODAL MEDIA STATE ══ */
-let mImg = null;       // base64 string of new image upload
-let mVid = null;       // File object of new video upload
-let mVidClear = false; // flag to delete video on save
-
-/* ══════════════════════════════════
-   INDEXEDDB — para videos grandes
-   ══════════════════════════════════ */
-function openIDB() {
-  if (idb) return Promise.resolve(idb);
-  return new Promise((res,rej) => {
-    const req = indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = e => {
-      e.target.result.createObjectStore('media', {keyPath:'key'});
-    };
-    req.onsuccess = e => { idb = e.target.result; res(idb); };
-    req.onerror   = e => rej(e);
-  });
-}
-async function idbSave(key, blob) {
-  await openIDB();
-  return new Promise((res,rej) => {
-    const tx = idb.transaction('media','readwrite');
-    tx.objectStore('media').put({key, blob});
-    tx.oncomplete = ()=>res(); tx.onerror = e=>rej(e);
-  });
-}
-async function idbGet(key) {
-  await openIDB();
-  return new Promise((res,rej) => {
-    const tx  = idb.transaction('media','readonly');
-    const req = tx.objectStore('media').get(key);
-    req.onsuccess = e => res(e.target.result?.blob||null);
-    req.onerror   = e => rej(e);
-  });
-}
-async function idbDel(key) {
-  await openIDB();
-  return new Promise((res,rej) => {
-    const tx = idb.transaction('media','readwrite');
-    tx.objectStore('media').delete(key);
-    tx.oncomplete = ()=>res(); tx.onerror = e=>rej(e);
-  });
-}
-
-/* ══ PERSIST ══ */
-function loadState() {
-  try { const r=localStorage.getItem(LS); if(r) S={...S,...JSON.parse(r)}; } catch(e){}
-  if (!S.products.length) {
-    S.products=[
-      {id:1,name:'Producto Ejemplo A',desc:'Edita desde el panel admin.',price:9990, stock:20,img:'',hasVideo:false,emoji:'📱'},
-      {id:2,name:'Producto Ejemplo B',desc:'Agrega foto y video propios.',price:14990,stock:15,img:'',hasVideo:false,emoji:'👟'},
-      {id:3,name:'Producto Ejemplo C',desc:'Gestiona tu catálogo completo.',price:24990,stock:8, img:'',hasVideo:false,emoji:'🎧'},
-    ];
-    save();
-  }
-}
-function save() { localStorage.setItem(LS,JSON.stringify(S)); }
+/* ══ ESTADO GLOBAL ══ */
+let products = [];
+let orders   = [];
+let mImg     = null;   // File | null — nueva imagen a subir
+let mVid     = null;   // File | null — nuevo video a subir
+let mVidClear = false; // true → eliminar video existente
+let editingId = null;  // id del producto en edición (null = nuevo)
 
 /* ══ THEME ══ */
 function initTheme() {
-  const t=localStorage.getItem('cv_theme')||'dark';
-  document.documentElement.setAttribute('data-theme',t);
-  document.getElementById('themeBtn').textContent=t==='dark'?'☀️':'🌙';
+  const t = localStorage.getItem('cv_theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('themeBtn').textContent = t === 'dark' ? '☀️' : '🌙';
 }
 function toggleTheme() {
-  const cur=document.documentElement.getAttribute('data-theme');
-  const next=cur==='dark'?'light':'dark';
-  document.documentElement.setAttribute('data-theme',next);
-  localStorage.setItem('cv_theme',next);
-  document.getElementById('themeBtn').textContent=next==='dark'?'☀️':'🌙';
+  const cur  = document.documentElement.getAttribute('data-theme');
+  const next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('cv_theme', next);
+  document.getElementById('themeBtn').textContent = next === 'dark' ? '☀️' : '🌙';
 }
 
 /* ══ UTILS ══ */
-function clp(n)  { return '$'+Number(n).toLocaleString('es-CL'); }
-function oNum(n) { return 'P'+String(n).padStart(2,'0'); }
+function clp(n)  { return '$' + Number(n).toLocaleString('es-CL'); }
+function oNum(n) { return 'P' + String(n).padStart(2, '0'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 let _tt;
-function toast(msg,type='') {
-  const el=document.getElementById('toast');
-  el.textContent=msg; el.className='toast show '+type;
-  clearTimeout(_tt); _tt=setTimeout(()=>el.className='toast',3500);
+function toast(msg, type = '') {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = 'toast show ' + type;
+  clearTimeout(_tt); _tt = setTimeout(() => el.className = 'toast', 3500);
 }
-
-/* ══ LOGIN ══ */
-function doLogin() {
-  if (document.getElementById('passInput').value===ADMIN_PASS) {
-    document.getElementById('loginGate').classList.add('hidden');
-    document.getElementById('adminContent').classList.add('visible');
-    loadData();
-  } else {
-    document.getElementById('loginErr').textContent='❌ Contraseña incorrecta';
-    document.getElementById('passInput').value='';
-    document.getElementById('passInput').focus();
-    setTimeout(()=>document.getElementById('loginErr').textContent='',3000);
-  }
-}
-
-function loadData() { updateStats(); renderProdTable(); }
-
-function updateStats() {
-  document.getElementById('statProds').textContent=S.products.length;
-  document.getElementById('statOrds').textContent=S.orders.length;
-  document.getElementById('statNext').textContent=oNum(S.nextN);
-  const rev=S.orders.filter(o=>o.status!=='cancelado').reduce((s,o)=>s+o.total,0);
-  document.getElementById('statRev').textContent=clp(rev);
-}
-
-/* ══ TABS ══ */
-function switchTab(tab,btn) {
-  document.querySelectorAll('.tab-nav button').forEach(b=>b.classList.remove('active'));
-  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
-  btn.classList.add('active');
-  document.getElementById('tab-'+tab).classList.add('active');
-  if(tab==='products') renderProdTable();
-  if(tab==='orders')   renderOrders();
+function showLoginError(msg) {
+  document.getElementById('loginErr').textContent = msg;
+  setTimeout(() => document.getElementById('loginErr').textContent = '', 4000);
 }
 
 /* ══════════════════════════════════
-   IMAGE UPLOAD
+   AUTH — Supabase
    ══════════════════════════════════ */
-async function handleImgFile(input) {
-  const file=input.files[0];
-  if (!file) return;
-  if (!file.type.startsWith('image/')) { toast('Selecciona una imagen válida','err'); return; }
-  try {
-    toast('Comprimiendo imagen…');
-    const b64 = await compressImg(file, 900, 0.82);
-    mImg = b64;
-    document.getElementById('pImg').value=''; // clear URL field
-    showImgPreview(b64);
-    const kb = Math.round(b64.length*0.75/1024);
-    toast(`✅ Foto lista (${kb} KB)`, 'ok');
-  } catch(e) { toast('Error al procesar la imagen','err'); }
+async function doLogin() {
+  const email = document.getElementById('emailInput').value.trim();
+  const pass  = document.getElementById('passInput').value;
+
+  if (!email || !pass) { showLoginError('❌ Ingresa email y contraseña'); return; }
+
+  if (!_sb) {
+    // Modo demo sin Supabase (fallback)
+    showLoginError('⚠️ Configura Supabase primero (ver supabase-setup.sql)');
+    return;
+  }
+
+  const btn = document.querySelector('.btn-login');
+  btn.disabled = true; btn.textContent = 'Ingresando…';
+
+  const { error } = await _sb.auth.signInWithPassword({ email, password: pass });
+
+  btn.disabled = false; btn.textContent = 'Ingresar al panel';
+
+  if (error) {
+    showLoginError('❌ Credenciales incorrectas');
+    document.getElementById('passInput').value = '';
+    document.getElementById('passInput').focus();
+  }
+  // Si no hay error, onAuthStateChange llama a showAdmin()
 }
 
-function compressImg(file, maxW, quality) {
-  return new Promise(res => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      let w=img.naturalWidth, h=img.naturalHeight;
-      if (w>maxW) { h=Math.round(h*maxW/w); w=maxW; }
-      const c=document.createElement('canvas');
-      c.width=w; c.height=h;
-      c.getContext('2d').drawImage(img,0,0,w,h);
-      res(c.toDataURL('image/jpeg',quality));
-    };
-    img.onerror = ()=>{ URL.revokeObjectURL(url); res(URL.createObjectURL(file)); };
-    img.src=url;
-  });
+async function doLogout() {
+  if (_sb) await _sb.auth.signOut();
+  showLoginForm();
+}
+
+function showLoginForm() {
+  document.getElementById('loginGate').classList.remove('hidden');
+  document.getElementById('adminContent').classList.remove('visible');
+  document.getElementById('btnLogout').style.display = 'none';
+  setTimeout(() => document.getElementById('emailInput').focus(), 80);
+}
+
+async function showAdmin() {
+  document.getElementById('loginGate').classList.add('hidden');
+  document.getElementById('adminContent').classList.add('visible');
+  document.getElementById('btnLogout').style.display = '';
+  await loadData();
+}
+
+async function loadData() {
+  await Promise.all([loadProducts(), loadOrders()]);
+  updateStats();
+  renderProdTable();
+}
+
+/* ══ CARGAR DATOS DESDE SUPABASE ══ */
+async function loadProducts() {
+  if (!_sb) return;
+  const { data, error } = await _sb.from('products').select('*').order('id');
+  if (data) products = data;
+  if (error) console.warn('Error cargando productos:', error.message);
+}
+
+async function loadOrders() {
+  if (!_sb) return;
+  const { data, error } = await _sb.from('orders').select('*').order('created_at', {ascending: false});
+  if (data) orders = data;
+  if (error) console.warn('Error cargando pedidos:', error.message);
+}
+
+function updateStats() {
+  document.getElementById('statProds').textContent = products.length;
+  document.getElementById('statOrds').textContent  = orders.length;
+
+  // Próximo número de pedido
+  const lastIdx = orders.reduce((m, o) => Math.max(m, o.order_idx || 0), 0);
+  document.getElementById('statNext').textContent = oNum(lastIdx + 1);
+
+  const rev = orders.filter(o => o.status !== 'cancelado').reduce((s, o) => s + (o.total || 0), 0);
+  document.getElementById('statRev').textContent = clp(rev);
+}
+
+/* ══ TABS ══ */
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab-nav button').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-' + tab).classList.add('active');
+  if (tab === 'products') renderProdTable();
+  if (tab === 'orders')   renderOrders();
+}
+
+/* ══════════════════════════════════
+   MEDIA UPLOAD (Supabase Storage)
+   ══════════════════════════════════ */
+async function uploadToStorage(file, folder) {
+  if (!_sb) throw new Error('Supabase no configurado');
+  const ext  = file.name.split('.').pop();
+  const path = `${folder}/${Date.now()}.${ext}`;
+  const { error } = await _sb.storage.from(STORAGE_BUCKET).upload(path, file, {upsert: true});
+  if (error) throw error;
+  const { data: { publicUrl } } = _sb.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+  return publicUrl;
+}
+
+async function handleImgFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { toast('Selecciona una imagen válida', 'err'); return; }
+  mImg = file;
+  document.getElementById('pImg').value = '';
+  // Preview local mientras se sube
+  const localUrl = URL.createObjectURL(file);
+  showImgPreview(localUrl);
+  const kb = Math.round(file.size / 1024);
+  toast(`✅ Foto lista para subir (${kb} KB)`, 'ok');
 }
 
 function showImgPreview(src) {
-  const z=document.getElementById('imgZone');
-  z.innerHTML=`
+  const z = document.getElementById('imgZone');
+  z.innerHTML = `
     <div class="uz-preview">
       <img src="${src}" alt="preview">
       <button class="btn-media-clear" onclick="clearImg(event)">🗑️ Quitar foto</button>
@@ -581,38 +591,33 @@ function showImgPreview(src) {
 }
 
 function clearImg(e) {
-  if(e){e.stopPropagation();e.preventDefault();}
-  mImg=null;
-  document.getElementById('pImg').value='';
+  if (e) { e.stopPropagation(); e.preventDefault(); }
+  mImg = null;
+  document.getElementById('pImg').value = '';
   resetImgZone();
 }
 
 function resetImgZone() {
-  document.getElementById('imgZone').innerHTML=`
+  document.getElementById('imgZone').innerHTML = `
     <span class="uz-icon">📷</span>
     <span class="uz-text">Click para subir foto</span>
-    <span class="uz-hint">JPG, PNG, WebP — se comprime automáticamente</span>
+    <span class="uz-hint">JPG, PNG, WebP — se sube a Supabase Storage</span>
     <input type="file" accept="image/*" onchange="handleImgFile(this)">`;
 }
 
-/* ══════════════════════════════════
-   VIDEO UPLOAD
-   ══════════════════════════════════ */
 function handleVidFile(input) {
-  const file=input.files[0];
+  const file = input.files[0];
   if (!file) return;
-  if (!file.type.startsWith('video/')) { toast('Selecciona un video válido','err'); return; }
-  mVid=file;
-  mVidClear=false;
-  const url=URL.createObjectURL(file);
-  const mb=(file.size/1024/1024).toFixed(1);
-  showVidPreview(url);
-  toast(`✅ Video listo (${mb} MB)`, 'ok');
+  if (!file.type.startsWith('video/')) { toast('Selecciona un video válido', 'err'); return; }
+  mVid = file;
+  mVidClear = false;
+  showVidPreview(URL.createObjectURL(file));
+  toast(`✅ Video listo para subir (${(file.size/1024/1024).toFixed(1)} MB)`, 'ok');
 }
 
 function showVidPreview(url) {
-  const z=document.getElementById('vidZone');
-  z.innerHTML=`
+  const z = document.getElementById('vidZone');
+  z.innerHTML = `
     <div class="uz-preview">
       <video src="${url}" controls muted style="max-height:150px;max-width:100%;border-radius:8px"></video>
       <button class="btn-media-clear" onclick="clearVid(event)">🗑️ Quitar video</button>
@@ -621,154 +626,157 @@ function showVidPreview(url) {
 }
 
 function clearVid(e) {
-  if(e){e.stopPropagation();e.preventDefault();}
-  mVid=null;
-  mVidClear=true;
+  if (e) { e.stopPropagation(); e.preventDefault(); }
+  mVid = null; mVidClear = true;
   resetVidZone();
 }
 
 function resetVidZone() {
-  document.getElementById('vidZone').innerHTML=`
+  document.getElementById('vidZone').innerHTML = `
     <span class="uz-icon">🎬</span>
     <span class="uz-text">Click para subir video</span>
-    <span class="uz-hint">MP4, MOV, WebM · Se guarda localmente en el navegador</span>
+    <span class="uz-hint">MP4, MOV, WebM · Se sube a Supabase Storage</span>
     <input type="file" accept="video/*" onchange="handleVidFile(this)">`;
 }
 
 /* ══════════════════════════════════
    PRODUCT MODAL
    ══════════════════════════════════ */
-async function openProdModal(id=null) {
-  mImg=null; mVid=null; mVidClear=false;
-  document.getElementById('prodModalTtl').textContent = id?'✏️ Editar Producto':'📦 Agregar Producto';
-  document.getElementById('prodId').value=id||'';
+function openProdModal(id = null) {
+  mImg = null; mVid = null; mVidClear = false;
+  editingId = id || null;
+  document.getElementById('prodModalTtl').textContent = id ? '✏️ Editar Producto' : '📦 Agregar Producto';
+  document.getElementById('prodId').value = id || '';
 
-  const p=id?S.products.find(x=>x.id===id):null;
-  document.getElementById('pName').value   = p?p.name:'';
-  document.getElementById('pDesc').value   = p?p.desc:'';
-  document.getElementById('pPrice').value  = p?p.price:'';
-  document.getElementById('pStock').value  = p?p.stock:'';
-  document.getElementById('pEmoji').value  = p?(p.emoji||'📦'):'📦';
+  const p = id ? products.find(x => x.id === id) : null;
+  document.getElementById('pName').value   = p ? p.name        : '';
+  document.getElementById('pDesc').value   = p ? (p.description || '') : '';
+  document.getElementById('pPrice').value  = p ? p.price       : '';
+  document.getElementById('pStock').value  = p ? p.stock       : '';
+  document.getElementById('pEmoji').value  = p ? (p.emoji || '📦') : '📦';
   document.getElementById('pImg').value    = '';
-  document.getElementById('pWprice').value = p?(p.wholesalePrice||''):'';
-  document.getElementById('pWmin').value   = p?(p.wholesaleMin||''):'4'; // always clear URL field
+  document.getElementById('pWprice').value = p ? (p.wholesale_price || '') : '';
+  document.getElementById('pWmin').value   = p ? (p.wholesale_min   || '') : '4';
 
-  // Image preview
-  if (p?.img) {
-    showImgPreview(p.img);
+  // Previsualizar imagen existente
+  if (p?.img_url) {
+    showImgPreview(p.img_url);
   } else {
     resetImgZone();
   }
 
-  // Video preview (load from IndexedDB)
+  // Video: previsualizar URL existente (Supabase Storage)
   resetVidZone();
-  if (p?.hasVideo) {
-    try {
-      const blob = await idbGet(`vid_${id}`);
-      if (blob) {
-        const url=URL.createObjectURL(blob);
-        showVidPreview(url);
-      }
-    } catch(e) {}
+  if (p?.video_url) {
+    showVidPreview(p.video_url);
   }
 
   document.getElementById('prodModal').classList.add('open');
 }
 
 async function saveProd() {
-  const id    = document.getElementById('prodId').value;
-  const name  = document.getElementById('pName').value.trim();
-  const desc  = document.getElementById('pDesc').value.trim();
-  const price = parseFloat(document.getElementById('pPrice').value);
-  const stock = parseInt(document.getElementById('pStock').value);
-  const emoji          = document.getElementById('pEmoji').value.trim()||'📦';
+  const id             = document.getElementById('prodId').value;
+  const name           = document.getElementById('pName').value.trim();
+  const description    = document.getElementById('pDesc').value.trim();
+  const price          = parseFloat(document.getElementById('pPrice').value);
+  const stock          = parseInt(document.getElementById('pStock').value);
+  const emoji          = document.getElementById('pEmoji').value.trim() || '📦';
   const urlImg         = document.getElementById('pImg').value.trim();
-  const wholesalePrice = parseFloat(document.getElementById('pWprice').value)||0;
-  const wholesaleMin   = parseInt(document.getElementById('pWmin').value)||4;
+  const wholesale_price = parseFloat(document.getElementById('pWprice').value) || 0;
+  const wholesale_min   = parseInt(document.getElementById('pWmin').value)   || 0;
 
-  if(!name)                { toast('Ingresa el nombre','err'); return; }
-  if(isNaN(price)||price<0){ toast('Precio inválido','err'); return; }
-  if(isNaN(stock)||stock<0){ toast('Stock inválido','err'); return; }
-  if(wholesalePrice>0 && wholesalePrice>=price){ toast('El precio mayorista debe ser menor al precio retail','err'); return; }
+  if (!name)                  { toast('Ingresa el nombre', 'err');   return; }
+  if (isNaN(price)||price < 0){ toast('Precio inválido', 'err');     return; }
+  if (isNaN(stock)||stock < 0){ toast('Stock inválido', 'err');      return; }
+  if (wholesale_price > 0 && wholesale_price >= price) {
+    toast('El precio mayorista debe ser menor al precio retail', 'err'); return;
+  }
 
-  // Final image: upload > URL > existing
-  const existingProd = id ? S.products.find(p=>p.id===parseInt(id)) : null;
-  const finalImg = mImg || urlImg || (existingProd?.img||'');
-
-  document.getElementById('btnSave').disabled=true;
-  document.getElementById('btnSave').textContent='Guardando…';
+  const btn = document.getElementById('btnSave');
+  btn.disabled = true; btn.textContent = '⏳ Guardando…';
 
   try {
-    if (id) {
-      const idx=S.products.findIndex(p=>p.id===parseInt(id));
-      if (idx>=0) {
-        let hasVideo = S.products[idx].hasVideo;
-
-        if (mVidClear) { await idbDel(`vid_${id}`); hasVideo=false; }
-        if (mVid)      { await idbSave(`vid_${id}`, mVid); hasVideo=true; }
-
-        S.products[idx]={...S.products[idx],name,desc,price,wholesalePrice,wholesaleMin,stock,img:finalImg,emoji,hasVideo};
-      }
-    } else {
-      const newId=S.products.length?Math.max(...S.products.map(p=>p.id))+1:1;
-      let hasVideo=false;
-      if (mVid) { await idbSave(`vid_${newId}`, mVid); hasVideo=true; }
-      S.products.push({id:newId,name,desc,price,wholesalePrice,wholesaleMin,stock,img:finalImg,emoji,hasVideo});
+    // ── Imagen ──
+    const existingProd = id ? products.find(p => p.id === parseInt(id)) : null;
+    let img_url = urlImg || existingProd?.img_url || '';
+    if (mImg instanceof File) {
+      toast('Subiendo imagen…');
+      img_url = await uploadToStorage(mImg, 'images');
     }
 
-    save(); renderProdTable(); updateStats();
+    // ── Video ──
+    let video_url = existingProd?.video_url || '';
+    let has_video = existingProd?.has_video  || false;
+    if (mVidClear)            { video_url = ''; has_video = false; }
+    if (mVid instanceof File) {
+      toast('Subiendo video…');
+      video_url = await uploadToStorage(mVid, 'videos');
+      has_video = true;
+    }
+
+    const payload = { name, description, price, stock, emoji, img_url, video_url, has_video, wholesale_price, wholesale_min };
+
+    if (id) {
+      const { error } = await _sb.from('products').update(payload).eq('id', parseInt(id));
+      if (error) throw error;
+    } else {
+      const { error } = await _sb.from('products').insert([payload]);
+      if (error) throw error;
+    }
+
+    await loadProducts();
+    renderProdTable(); updateStats();
     closeModal('prodModal');
-    toast(id?'✅ Producto actualizado':'✅ Producto agregado','ok');
+    toast(id ? '✅ Producto actualizado' : '✅ Producto agregado', 'ok');
   } catch(e) {
-    toast('Error al guardar. ¿Espacio insuficiente?','err');
+    toast('Error al guardar: ' + (e.message || e), 'err');
   } finally {
-    document.getElementById('btnSave').disabled=false;
-    document.getElementById('btnSave').textContent='💾 Guardar producto';
+    btn.disabled = false; btn.textContent = '💾 Guardar producto';
   }
 }
 
 async function delProd(id) {
   if (!confirm('¿Eliminar este producto? No se puede deshacer.')) return;
-  const p=S.products.find(x=>x.id===id);
-  if (p?.hasVideo) { try { await idbDel(`vid_${id}`); } catch(e){} }
-  S.products=S.products.filter(x=>x.id!==id);
-  S.cart=S.cart.filter(i=>i.pid!==id);
-  save(); renderProdTable(); updateStats();
-  toast('Producto eliminado','');
+  const { error } = await _sb.from('products').delete().eq('id', id);
+  if (error) { toast('Error al eliminar: ' + error.message, 'err'); return; }
+  await loadProducts();
+  renderProdTable(); updateStats();
+  toast('Producto eliminado', '');
 }
 
-function setStock(id,val) {
-  const p=S.products.find(x=>x.id===id);
-  if(p){p.stock=Math.max(0,parseInt(val)||0);save();updateStats();toast('Stock actualizado ✅','ok');}
+async function setStock(id, val) {
+  const newStock = Math.max(0, parseInt(val) || 0);
+  const { error } = await _sb.from('products').update({stock: newStock}).eq('id', id);
+  if (!error) { await loadProducts(); updateStats(); toast('Stock actualizado ✅', 'ok'); }
 }
 
-async function renderProdTable() {
-  const tbody=document.getElementById('prodTbody');
-  const n=S.products.length;
-  document.getElementById('prodCountLbl').textContent=n+' producto'+(n===1?'':'s');
+function renderProdTable() {
+  const tbody = document.getElementById('prodTbody');
+  const n = products.length;
+  document.getElementById('prodCountLbl').textContent = n + ' producto' + (n === 1 ? '' : 's');
 
   if (!n) {
-    tbody.innerHTML='<tr><td colspan="6" style="text-align:center;padding:2.5rem;color:var(--muted)">Sin productos. Agrega el primero ➕</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2.5rem;color:var(--muted)">Sin productos. Agrega el primero ➕</td></tr>';
     return;
   }
 
-  // Render rows (images only, videos loaded async)
-  tbody.innerHTML=S.products.map(p=>`
-    <tr id="trow_${p.id}">
+  tbody.innerHTML = products.map(p => `
+    <tr>
       <td>
-        <div class="mini-th" id="mth_${p.id}">
-          ${p.img
-            ?`<img src="${p.img}" alt="${p.name}" onerror="this.parentElement.textContent='${p.emoji||'📦'}'"><span class="vid-badge" style="display:none" id="vbdg_${p.id}">▶ VID</span>`
-            :`<span>${p.emoji||'📦'}</span>${p.hasVideo?`<span class="vid-badge" id="vbdg_${p.id}">▶ VID</span>`:''}`}
+        <div class="mini-th">
+          ${p.img_url
+            ? `<img src="${p.img_url}" alt="${p.name}" onerror="this.parentElement.textContent='${p.emoji||'📦'}'">
+               ${p.has_video ? '<span class="vid-badge">▶ VID</span>' : ''}`
+            : `<span>${p.emoji || '📦'}</span>${p.has_video ? '<span class="vid-badge">▶ VID</span>' : ''}`}
         </div>
       </td>
       <td><strong>${p.name}</strong></td>
-      <td style="color:var(--muted);max-width:180px;font-size:.82rem">${p.desc||'—'}</td>
+      <td style="color:var(--muted);max-width:180px;font-size:.82rem">${p.description || '—'}</td>
       <td>
         <strong style="color:var(--accent)">${clp(p.price)}</strong>
-        ${p.wholesalePrice>0?`<br><span class="ws-badge">📦 ${clp(p.wholesalePrice)} ×${p.wholesaleMin}+</span>`:''}
+        ${p.wholesale_price > 0 ? `<br><span class="ws-badge">📦 ${clp(p.wholesale_price)} ×${p.wholesale_min}+</span>` : ''}
       </td>
-      <td><input class="stock-inp" type="number" value="${p.stock}" min="0" onchange="setStock(${p.id},this.value)"></td>
+      <td><input class="stock-inp" type="number" value="${p.stock}" min="0" onchange="setStock(${p.id}, this.value)"></td>
       <td>
         <div style="display:flex;gap:5px">
           <button class="btn-sm btn-edit" onclick="openProdModal(${p.id})">✏️ Editar</button>
@@ -777,59 +785,54 @@ async function renderProdTable() {
       </td>
     </tr>`).join('');
 
-  // Load video thumbnails async
-  for (const p of S.products.filter(x=>x.hasVideo)) {
-    try {
-      const blob=await idbGet(`vid_${p.id}`);
-      if (!blob) continue;
-      const url=URL.createObjectURL(blob);
-      const mth=document.getElementById(`mth_${p.id}`);
-      if (mth) {
-        mth.innerHTML=`<video src="${url}" muted playsinline style="width:100%;height:100%;object-fit:cover" onmouseover="this.play()" onmouseout="this.pause();this.currentTime=0"></video><span class="vid-badge">▶ VID</span>`;
-      }
-    } catch(e) {}
-  }
 }
 
 /* ══ ORDERS ══ */
-function updStatus(num,status) {
-  const o=S.orders.find(x=>x.num===num);
-  if(o){o.status=status;save();updateStats();toast('Estado actualizado ✅','ok');}
+async function updStatus(orderNum, status) {
+  const { error } = await _sb.from('orders').update({status}).eq('order_num', orderNum);
+  if (error) { toast('Error al actualizar: ' + error.message, 'err'); return; }
+  await loadOrders();
+  updateStats();
+  renderOrders();
+  toast('Estado actualizado ✅', 'ok');
 }
 
 function renderOrders() {
-  const list=document.getElementById('ordersList');
-  const n=S.orders.length;
-  document.getElementById('ordCountLbl').textContent=n+' pedido'+(n===1?'':'s');
+  const list = document.getElementById('ordersList');
+  const n = orders.length;
+  document.getElementById('ordCountLbl').textContent = n + ' pedido' + (n === 1 ? '' : 's');
 
   if (!n) {
-    list.innerHTML=`<div class="empty-orders"><span class="icon">📋</span><h3>Sin pedidos aún</h3><p style="color:var(--muted);font-size:.86rem;margin-top:.4rem">Los pedidos aparecerán aquí cuando los clientes compren</p></div>`;
+    list.innerHTML = `<div class="empty-orders"><span class="icon">📋</span><h3>Sin pedidos aún</h3><p style="color:var(--muted);font-size:.86rem;margin-top:.4rem">Los pedidos aparecerán aquí cuando los clientes compren</p></div>`;
     return;
   }
 
-  const sorted=[...S.orders].sort((a,b)=>b.numIdx-a.numIdx);
-  const ST=[
-    {v:'pendiente',l:'⏳ Pendiente'},{v:'confirmado',l:'✅ Confirmado'},
-    {v:'en_camino',l:'🚚 En camino'},{v:'entregado',l:'🎉 Entregado'},
-    {v:'cancelado',l:'❌ Cancelado'},
+  const ST = [
+    {v:'pendiente', l:'⏳ Pendiente'}, {v:'confirmado', l:'✅ Confirmado'},
+    {v:'en_camino', l:'🚚 En camino'}, {v:'entregado',  l:'🎉 Entregado'},
+    {v:'cancelado', l:'❌ Cancelado'},
   ];
 
-  list.innerHTML=sorted.map(o=>{
-    const isE=o.customer.delivery==='envio', isW=o.payment==='webpay';
-    const dB=isE?'<span class="badge b-envio">📦 Envío</span>':'<span class="badge b-presencial">🏪 Presencial</span>';
-    const pB=isW?'<span class="badge b-webpay">💳 WebPay</span>':'<span class="badge b-transfer">🏦 Transferencia</span>';
-    const tN=!isW?(isE?' <em style="color:var(--muted);font-size:.8rem">— ahora</em>':' <em style="color:var(--muted);font-size:.8rem">— en el lugar</em>'):'';
-    const sO=ST.map(s=>`<option value="${s.v}" ${o.status===s.v?'selected':''}>${s.l}</option>`).join('');
-    const iR=o.items.map(it=>`<tr><td>${it.name}</td><td style="text-align:right">${it.qty}</td><td style="text-align:right">${clp(it.price)}</td><td style="text-align:right"><strong>${clp(it.sub)}</strong></td></tr>`).join('');
+  list.innerHTML = orders.map(o => {
+    const isE = o.delivery_type === 'envio';
+    const isW = o.payment === 'webpay';
+    const date = new Date(o.created_at).toLocaleDateString('es-CL');
+    const time = new Date(o.created_at).toLocaleTimeString('es-CL', {hour:'2-digit', minute:'2-digit'});
+    const dB   = isE ? '<span class="badge b-envio">📦 Envío</span>' : '<span class="badge b-presencial">🏪 Presencial</span>';
+    const pB   = isW ? '<span class="badge b-webpay">💳 WebPay</span>' : '<span class="badge b-transfer">🏦 Transferencia</span>';
+    const tN   = !isW ? (isE ? ' <em style="color:var(--muted);font-size:.8rem">— ahora</em>' : ' <em style="color:var(--muted);font-size:.8rem">— en el lugar</em>') : '';
+    const sO   = ST.map(s => `<option value="${s.v}" ${o.status === s.v ? 'selected' : ''}>${s.l}</option>`).join('');
+    const items = Array.isArray(o.items) ? o.items : [];
+    const iR   = items.map(it => `<tr><td>${it.name}</td><td style="text-align:right">${it.qty}</td><td style="text-align:right">${clp(it.price)}</td><td style="text-align:right"><strong>${clp(it.sub)}</strong></td></tr>`).join('');
     return `
     <div class="ord-card">
       <div class="oc-head">
-        <div><div class="oc-num">${o.num}</div><div class="oc-date">${o.date} · ${o.time}</div></div>
-        <div class="badges">${dB}${pB}<select class="status-sel" onchange="updStatus('${o.num}',this.value)">${sO}</select></div>
+        <div><div class="oc-num">${o.order_num}</div><div class="oc-date">${date} · ${time}</div></div>
+        <div class="badges">${dB}${pB}<select class="status-sel" onchange="updStatus('${o.order_num}',this.value)">${sO}</select></div>
       </div>
       <div class="oc-grid">
-        <div class="oc-sec"><h4>👤 Cliente</h4><p><strong>${o.customer.name}</strong><br><small>${o.customer.email}</small><br><small>${o.customer.phone}</small>${o.customer.rut?`<br><small>RUT: ${o.customer.rut}</small>`:''}</p></div>
-        <div class="oc-sec"><h4>${isE?'📦 Dirección':'🏪 Retiro Presencial'}</h4><p>${o.customer.addr}${tN}</p></div>
+        <div class="oc-sec"><h4>👤 Cliente</h4><p><strong>${o.customer_name}</strong><br><small>${o.customer_email}</small><br><small>${o.customer_phone}</small>${o.customer_rut ? `<br><small>RUT: ${o.customer_rut}</small>` : ''}</p></div>
+        <div class="oc-sec"><h4>${isE ? '📦 Dirección' : '🏪 Retiro Presencial'}</h4><p>${o.addr || '—'}${tN}</p></div>
       </div>
       <table class="items-t"><thead><tr><th>Producto</th><th style="text-align:right">Cant.</th><th style="text-align:right">Precio</th><th style="text-align:right">Subtotal</th></tr></thead><tbody>${iR}</tbody></table>
       <div class="oc-total"><span>Total del pedido</span><span>${clp(o.total)}</span></div>
@@ -838,10 +841,27 @@ function renderOrders() {
 }
 
 /* ══ INIT ══ */
-loadState();
-initTheme();
-openIDB().catch(()=>{});
-setTimeout(()=>document.getElementById('passInput').focus(),80);
+(async () => {
+  initTheme();
+  if (!_sb) {
+    // Sin Supabase configurado: mostrar aviso en login
+    document.getElementById('loginErr').textContent = '⚠️ Configura Supabase en admin.html (ver supabase-setup.sql)';
+    setTimeout(() => document.getElementById('emailInput').focus(), 80);
+    return;
+  }
+  // Verificar sesión existente
+  const { data: { session } } = await _sb.auth.getSession();
+  if (session) {
+    await showAdmin();
+  } else {
+    showLoginForm();
+  }
+  // Escuchar cambios de auth (login / logout)
+  _sb.auth.onAuthStateChange(async (event, session) => {
+    if (session) await showAdmin();
+    else showLoginForm();
+  });
+})();
 </script>
 </body>
 </html>
